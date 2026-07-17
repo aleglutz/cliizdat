@@ -1,0 +1,11 @@
+# compiled binaries (main package builds to ./cliizdat)
+/cliizdat
+/handpress
+*.exe
+
+# test / coverage output
+*.out
+*.test
+
+# macOS
+.DS_Store

@@ -1,7 +1,7 @@
 # cliizdat
 
 > A cli-native ANSI and ASCII text editor inspired by ACiDDraw, its Unix
-> successor DurDraw, and the rich tradition of concrete poetry in the Eastern
+> successor [DurDraw](https://github.com/durdraw/durdraw), and the rich tradition of concrete poetry in the Eastern
 > Bloc samizdat.
 
 `cliizdat` is a keyboard-only, cell-grid glyph editor for Unicode block art —

@@ -31,9 +31,12 @@ const (
 )
 
 var (
-	cursorStyle = lipgloss.NewStyle().Background(lipgloss.Color("46")).Foreground(lipgloss.Color("16"))
+	// euromancer blue ribbon #2f6f9c на светлом фоне, зелёный 46 на тёмном
+	accent      = lipgloss.AdaptiveColor{Dark: "46", Light: "#2f6f9c"}
+	cursorStyle = lipgloss.NewStyle().Background(accent).
+			Foreground(lipgloss.AdaptiveColor{Dark: "16", Light: "#f5f0e6"})
 	frameStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	markStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("46"))
+	markStyle   = lipgloss.NewStyle().Foreground(accent)
 	statusStyle = lipgloss.NewStyle().Reverse(true)
 	selStyle    = lipgloss.NewStyle().Background(lipgloss.Color("238"))
 	faintStyle  = lipgloss.NewStyle().Faint(true)
@@ -51,6 +54,9 @@ type model struct {
 	curR, curC   int // 0-based, координаты канвы
 	offR, offC   int
 	termW, termH int
+
+	dotOn      bool
+	dotR, dotC int // суб-позиция точки в ячейке: ряд 0..3, столбец 0..1
 
 	selOn      bool
 	selSticky  bool // выделение от `s`: стрелки растят, не сбрасывают
@@ -153,7 +159,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.status = ""
 	key := msg.String()
+	if m.dotOn {
+		switch key {
+		case "up", "down", "left", "right":
+			m.moveDot(key)
+			m.clampView()
+			return m, nil
+		case ".":
+			m.toggleDot()
+			return m, nil
+		case "b", "esc":
+			m.dotOn = false
+			m.status = "dot-mode off"
+			return m, nil
+		}
+	}
 	switch key {
+	case "b":
+		m.dotOn = true
+		m.status = "dot-mode: стрелки — точка, `.` — тоггл, b/Esc — выход"
 	case "up", "down", "left", "right":
 		if !m.selSticky {
 			m.selOn = false
@@ -208,6 +232,10 @@ func (m model) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.paste()
 	case "r":
 		m.repaint()
+	case "X":
+		m.flip(true)
+	case "Y":
+		m.flip(false)
 	case "c":
 		m.mode = modeColor
 		if m.curFg >= 0 {
@@ -347,6 +375,176 @@ func (m *model) fillOrStamp(slot int, advance bool) {
 	if advance && m.curC < m.proj.CanvasW-1 {
 		m.curC++
 	}
+}
+
+// ── braille dot-mode ───────────────────────────────────────────────────
+
+// dotBits — бит точки брайля по [ряд][столбец] сетки 2×4:
+// d1,d2,d3,d7 — левый столбец, d4,d5,d6,d8 — правый. Глиф = U+2800 | маска.
+var dotBits = [4][2]int{
+	{0x01, 0x08},
+	{0x02, 0x10},
+	{0x04, 0x20},
+	{0x40, 0x80},
+}
+
+// moveDot двигает курсор на одну точку в глобальной дот-сетке канвы
+// (W×2, H×4); границы ячеек прозрачны.
+func (m *model) moveDot(dir string) {
+	dy := m.curR*4 + m.dotR
+	dx := m.curC*2 + m.dotC
+	switch dir {
+	case "up":
+		dy--
+	case "down":
+		dy++
+	case "left":
+		dx--
+	case "right":
+		dx++
+	}
+	dy = min(max(dy, 0), m.proj.CanvasH*4-1)
+	dx = min(max(dx, 0), m.proj.CanvasW*2-1)
+	m.curR, m.dotR = dy/4, dy%4
+	m.curC, m.dotC = dx/2, dx%2
+}
+
+// brailleMask — маска точек глифа; не-брайль (включая пробел) = 0,
+// поэтому первый тоггл на чужой ячейке заменяет её брайлем с одной точкой.
+func brailleMask(g rune) int {
+	if g >= 0x2800 && g <= 0x28FF {
+		return int(g - 0x2800)
+	}
+	return 0
+}
+
+// toggleDot — XOR точки под курсором. Погасшая последняя точка пишет
+// пробел (прозрачность), не U+2800.
+func (m *model) toggleDot() {
+	L := m.layer()
+	lr, lc := m.curR-L.AtR, m.curC-L.AtC
+	if lr < 0 || lr >= L.Buf.H || lc < 0 || lc >= L.Buf.W {
+		m.status = "вне активного слоя"
+		return
+	}
+	mask := brailleMask(L.Buf.Get(lr, lc).G) ^ dotBits[m.dotR][m.dotC]
+	after := cellbuf.Blank
+	if mask != 0 {
+		g := rune(0x2800 + mask)
+		after = cellbuf.Cell{G: g, Fg: m.cellFg(g)}
+	}
+	L.Buf.Apply([]cellbuf.Change{{Row: lr, Col: lc, After: after}})
+}
+
+// ── flip (mirror) ──────────────────────────────────────────────────────
+
+// Зеркальные пары глифов. Брайль и октанты зеркалятся арифметикой (см.
+// mirrorGlyph); здесь — ASCII и блок-элементы. Симметричные (эгейские
+// кресты/решётки, '│', 'X'…) в таблицах отсутствуют → проходят как есть.
+var mirrorHPairs = map[rune]rune{
+	'(': ')', '[': ']', '{': '}', '<': '>', '/': '\\',
+	'▌': '▐', '▖': '▗', '▘': '▝', '▙': '▟', '▛': '▜', '▚': '▞', '◀': '▶',
+	'╱': '╲', 'b': 'd', 'p': 'q',
+}
+var mirrorVPairs = map[rune]rune{
+	'/': '\\', '▀': '▄', '▘': '▖', '▝': '▗', '▛': '▙', '▜': '▟',
+	'▚': '▞', 'v': '^', 'b': 'p', 'd': 'q', 'M': 'W',
+}
+
+func symPairs(m map[rune]rune) map[rune]rune {
+	out := make(map[rune]rune, len(m)*2)
+	for a, b := range m {
+		out[a], out[b] = b, a
+	}
+	return out
+}
+
+var mirrorH = symPairs(mirrorHPairs)
+var mirrorV = symPairs(mirrorVPairs)
+
+// brailleSwap переставляет биты точек по списку пар (a,b).
+func brailleSwap(mask int, pairs [4][2]int) int {
+	out := 0
+	for _, p := range pairs {
+		if mask&p[0] != 0 {
+			out |= p[1]
+		}
+		if mask&p[1] != 0 {
+			out |= p[0]
+		}
+	}
+	return out
+}
+
+// mirrorGlyph зеркалит один глиф по горизонтали (h=true) или вертикали.
+func mirrorGlyph(g rune, h bool) rune {
+	if g >= 0x2800 && g <= 0x28FF {
+		mask := int(g - 0x2800)
+		if h {
+			return rune(0x2800 + brailleSwap(mask, [4][2]int{{0x01, 0x08}, {0x02, 0x10}, {0x04, 0x20}, {0x40, 0x80}}))
+		}
+		return rune(0x2800 + brailleSwap(mask, [4][2]int{{0x01, 0x40}, {0x02, 0x04}, {0x08, 0x80}, {0x10, 0x20}}))
+	}
+	tbl := mirrorV
+	if h {
+		tbl = mirrorH
+	}
+	if p, ok := tbl[g]; ok {
+		return p
+	}
+	return g
+}
+
+// flip зеркалит выделение (или весь активный слой) по оси, зеркаля и сами
+// глифы. Один шаг undo. Цвет ячейки едет вместе с глифом — двухтон сохраняется.
+func (m *model) flip(h bool) {
+	L := m.layer()
+	r1, c1, r2, c2 := 0, 0, L.Buf.H-1, L.Buf.W-1
+	if m.selOn {
+		sr1, sc1, sr2, sc2 := m.selRect()
+		r1, c1, r2, c2 = sr1-L.AtR, sc1-L.AtC, sr2-L.AtR, sc2-L.AtC
+	}
+	r1, c1 = max(r1, 0), max(c1, 0)
+	r2, c2 = min(r2, L.Buf.H-1), min(c2, L.Buf.W-1)
+	if r1 > r2 || c1 > c2 {
+		m.status = "flip: пусто"
+		return
+	}
+	// снимок — After считаем из до-флипового состояния, порядок Apply не важен
+	snap := make([][]cellbuf.Cell, r2-r1+1)
+	for r := r1; r <= r2; r++ {
+		row := make([]cellbuf.Cell, c2-c1+1)
+		for c := c1; c <= c2; c++ {
+			row[c-c1] = L.Buf.Get(r, c)
+		}
+		snap[r-r1] = row
+	}
+	var group []cellbuf.Change
+	for r := r1; r <= r2; r++ {
+		for c := c1; c <= c2; c++ {
+			sr, sc := r, c
+			if h {
+				sc = c2 - (c - c1)
+			} else {
+				sr = r2 - (r - r1)
+			}
+			src := snap[sr-r1][sc-c1]
+			after := cellbuf.Cell{G: mirrorGlyph(src.G, h), Fg: src.Fg}
+			if after != L.Buf.Get(r, c) {
+				group = append(group, cellbuf.Change{Row: r, Col: c, After: after})
+			}
+		}
+	}
+	if len(group) == 0 {
+		m.status = "flip: без изменений"
+		return
+	}
+	L.Buf.Apply(group)
+	axis := "Y"
+	if h {
+		axis = "X"
+	}
+	m.status = fmt.Sprintf("flip %s (%d×%d)", axis, c2-c1+1, r2-r1+1)
 }
 
 // repaint красит глифы текущим цветом, не трогая символы.
@@ -767,6 +965,10 @@ func (m model) View() string {
 				switch {
 				case r == m.curR && c == m.curC:
 					st = cursorStyle
+					if m.dotOn {
+						// превью того, что сделает `.`: маска с XOR целевой точки
+						vc.g = rune(0x2800 + (brailleMask(vc.g) ^ dotBits[m.dotR][m.dotC]))
+					}
 				case r >= r1 && r <= r2 && c >= c1 && c <= c2:
 					st = st.Background(lipgloss.Color("238"))
 				}
@@ -879,6 +1081,8 @@ var helpRows = [][2]string{
 	{"1–9", "stamp slot (fills the selection)"},
 	{"0 / x", "erase (slot 0 is always the eraser)"},
 	{"y d p", "copy · cut · paste"},
+	{"b", "braille dot-mode: arrows move per dot, `.` toggles"},
+	{"X Y", "flip selection/layer horizontally · vertically (mirrors glyphs)"},
 	{"", ""},
 	{"c", "256-color picker"},
 	{"C", "eyedropper: pick color under cursor"},
@@ -913,7 +1117,7 @@ func (m model) viewHelp() string {
 	body = append(body, "", "  any key to close")
 
 	var b strings.Builder
-	b.WriteString(frameStyle.Render("╭─ ") + markStyle.Render("✳") + " help " +
+	b.WriteString(frameStyle.Render("╭─ ") + markStyle.Render("༒") + " help " +
 		frameStyle.Render(strings.Repeat("─", max(0, vw-8))+"╮"))
 	b.WriteByte('\n')
 	for i := 0; i < vh; i++ {
@@ -930,18 +1134,21 @@ func (m model) viewHelp() string {
 	return b.String()
 }
 
-// frameTop — титул рамки: ╭─ ✳ cliizdat · file ────╮ на всю ширину терминала.
+const wordmark = "༒cliizdat༒"
+
+// frameTop — титул рамки: ╭─ ༒cliizdat༒ file ────╮ на всю ширину терминала.
 func (m model) frameTop() string {
 	name := m.proj.Path
 	if name == "" {
 		name = m.layer().AbsPath
 	}
-	title := " cliizdat · " + filepath.Base(name) + " "
-	fill := m.termW - 5 - runewidth.StringWidth(title) // ╭─ + ✳ + ╮ = 5
+	title := " " + filepath.Base(name) + " "
+	used := runewidth.StringWidth("╭─ "+wordmark+title) + 1 // +╮
+	fill := m.termW - used
 	if fill < 0 {
 		fill = 0
 	}
-	return frameStyle.Render("╭─ ") + markStyle.Render("✳") + title +
+	return frameStyle.Render("╭─ ") + markStyle.Render(wordmark) + title +
 		frameStyle.Render(strings.Repeat("─", fill)+"╮")
 }
 
@@ -969,14 +1176,28 @@ func (m model) statusBar() string {
 		if m.solo {
 			solo = " │ SOLO"
 		}
-		s = fmt.Sprintf(" %d,%d │ L%d/%d │ %d%c U+%04X │ fg %s ■%s%s%s",
+		dot := ""
+		if m.dotOn {
+			dot = fmt.Sprintf(" │ DOT %d,%d", m.curR*4+m.dotR+1, m.curC*2+m.dotC+1)
+		}
+		left := fmt.Sprintf(" %d,%d │ L%d/%d │ %d%c U+%04X │ fg %s ",
 			m.curR+1, m.curC+1,
 			m.active+1, len(m.proj.Layers),
 			m.lastSlot, m.proj.Slots[m.lastSlot], g,
-			fgLabel(m.curFg), sel, solo, dirty)
+			fgLabel(m.curFg))
 		if m.status != "" {
-			s = " " + m.status + " │" + s
+			left = " " + m.status + " │" + left
 		}
+		right := dot + sel + solo + dirty
+		if pad := m.termW - runewidth.StringWidth(left) - 1 - runewidth.StringWidth(right); pad > 0 {
+			right += strings.Repeat(" ", pad)
+		}
+		swatch := statusStyle.Render("■")
+		if m.curFg >= 0 {
+			swatch = lipgloss.NewStyle().
+				Background(lipgloss.Color(strconv.Itoa(m.curFg))).Render(" ")
+		}
+		return statusStyle.Render(left) + swatch + statusStyle.Render(right)
 	}
 	if w := runewidth.StringWidth(s); w < m.termW {
 		s += strings.Repeat(" ", m.termW-w)

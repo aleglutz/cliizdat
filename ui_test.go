@@ -130,8 +130,8 @@ func TestEyedropper(t *testing.T) {
 	m := newTestModel(p, nil)
 	m.termW, m.termH = 40, 8
 	m.curFg = 196
-	m = press(m, "1")       // █ fg196 override at 0,0
-	m = press(m, "left")    // назад на ячейку
+	m = press(m, "1")    // █ fg196 override at 0,0
+	m = press(m, "left") // назад на ячейку
 	m.curFg = -1
 	m = press(m, "C")
 	if m.curFg != 196 {
@@ -337,4 +337,185 @@ func TestHelpOpensAndCloses(t *testing.T) {
 	if press(m, "x").mode != modeEdit {
 		t.Fatal("any key did not close help")
 	}
+}
+
+// ── braille dot-mode (Phase 4a) ────────────────────────────────────────
+
+func TestDotModeToggleAndErase(t *testing.T) {
+	p := implicitProject(t, 10, 3)
+	m := newTestModel(p, nil)
+
+	m = press(m, "b", ".")
+	if g := p.Layers[0].Buf.Get(0, 0).G; g != '⠁' { // d1
+		t.Fatalf("first dot: got %U, want U+2801", g)
+	}
+	m = press(m, "down", ".")
+	if g := p.Layers[0].Buf.Get(0, 0).G; g != '⠃' { // d1+d2
+		t.Fatalf("second dot: got %U, want U+2803", g)
+	}
+	// погасили обе — ячейка стала пробелом, не U+2800
+	m = press(m, ".", "up", ".")
+	if g := p.Layers[0].Buf.Get(0, 0).G; g != ' ' {
+		t.Fatalf("cleared cell: got %U, want space", g)
+	}
+	_ = m
+}
+
+func TestDotModeCrossesCellBoundary(t *testing.T) {
+	p := implicitProject(t, 10, 3)
+	m := newTestModel(p, nil)
+
+	// 4 шага вниз от (0,0): точки 0..3 в ячейке 0 → точка 0 ячейки 1
+	m = press(m, "b", "down", "down", "down", "down")
+	if m.curR != 1 || m.dotR != 0 {
+		t.Fatalf("cell crossing down: curR=%d dotR=%d", m.curR, m.dotR)
+	}
+	// 2 шага вправо: столбцы 0,1 ячейки → столбец 0 следующей
+	m = press(m, "right", "right")
+	if m.curC != 1 || m.dotC != 0 {
+		t.Fatalf("cell crossing right: curC=%d dotC=%d", m.curC, m.dotC)
+	}
+	// клампится в глобальной дот-сетке
+	m = press(m, "up", "up", "up", "up", "up", "up")
+	if m.curR != 0 || m.dotR != 0 {
+		t.Fatalf("clamp top: curR=%d dotR=%d", m.curR, m.dotR)
+	}
+}
+
+func TestDotModeReplacesForeignGlyph(t *testing.T) {
+	p := implicitProject(t, 10, 3)
+	p.Layers[0].Buf.Apply([]cellbuf.Change{{Row: 0, Col: 0,
+		After: cellbuf.Cell{G: '\U00010122', Fg: 240}}}) // эгейский крест
+	m := newTestModel(p, nil)
+
+	m = press(m, "b", ".")
+	if g := p.Layers[0].Buf.Get(0, 0).G; g != '⠁' {
+		t.Fatalf("foreign glyph not replaced: %U", g)
+	}
+	// undo возвращает эгейский
+	m = press(m, "u")
+	if g := p.Layers[0].Buf.Get(0, 0).G; g != '\U00010122' {
+		t.Fatalf("undo after replace: %U", g)
+	}
+	_ = m
+}
+
+func TestDotModeFgOverride(t *testing.T) {
+	p := implicitProject(t, 10, 3)
+	m := newTestModel(p, nil)
+
+	// кисть = база слоя (-1) → override не пишется
+	m = press(m, "b", ".")
+	if fg := p.Layers[0].Buf.Get(0, 0).Fg; fg != -1 {
+		t.Fatalf("fg with base brush: %d, want -1", fg)
+	}
+	// кисть 246 ≠ базы → override
+	m.curFg = 246
+	m = press(m, "right", ".")
+	if fg := p.Layers[0].Buf.Get(0, 0).Fg; fg != 246 {
+		t.Fatalf("fg override: %d, want 246", fg)
+	}
+}
+
+func TestDotModeLeavesStampingAlone(t *testing.T) {
+	p := implicitProject(t, 10, 3)
+	m := newTestModel(p, nil)
+
+	// вне дот-режима цифры штампуют как раньше
+	m = press(m, "b", "esc", "1")
+	if g := p.Layers[0].Buf.Get(0, 0).G; g != '█' {
+		t.Fatalf("stamp after dot-mode exit: %U", g)
+	}
+	if m.dotOn {
+		t.Fatal("dot-mode still on after esc")
+	}
+}
+
+// ── flip (Phase 4a) ────────────────────────────────────────────────────
+
+func TestFlipBrailleGlyphInPlace(t *testing.T) {
+	p := implicitProject(t, 1, 1) // 1×1 → позиция не меняется, виден только бит-свап
+	// ⠁ = d1 (верх-лево). H-mirror → d4 (⠈); V-mirror → d7 (⡀).
+	p.Layers[0].Buf.Apply([]cellbuf.Change{{Row: 0, Col: 0,
+		After: cellbuf.Cell{G: '⠁', Fg: -1}}})
+	m := newTestModel(p, nil)
+
+	m = press(m, "X")
+	if g := p.Layers[0].Buf.Get(0, 0).G; g != '⠈' {
+		t.Fatalf("flip X of ⠁: got %U, want U+2808 ⠈", g)
+	}
+	m = press(m, "X", "Y") // вернуть ⠁, затем вертикально → ⡀ (d7)
+	if g := p.Layers[0].Buf.Get(0, 0).G; g != '⡀' {
+		t.Fatalf("flip Y of ⠁: got %U, want U+2840 ⡀", g)
+	}
+	_ = m
+}
+
+func TestFlipHorizontalMovesAndMirrors(t *testing.T) {
+	p := implicitProject(t, 4, 1)
+	// ⠁ в колонке 0; после flip X всего слоя (ширина 4) уедет в колонку 3 как ⠈
+	p.Layers[0].Buf.Apply([]cellbuf.Change{{Row: 0, Col: 0,
+		After: cellbuf.Cell{G: '⠁', Fg: 240}}})
+	m := newTestModel(p, nil)
+
+	m = press(m, "X")
+	if g := p.Layers[0].Buf.Get(0, 0).G; g != ' ' {
+		t.Fatalf("col0 after flip: %U, want space", g)
+	}
+	c3 := p.Layers[0].Buf.Get(0, 3)
+	if c3.G != '⠈' {
+		t.Fatalf("col3 after flip: %U, want ⠈", c3.G)
+	}
+	if c3.Fg != 240 {
+		t.Fatalf("fg did not travel: %d, want 240", c3.Fg)
+	}
+	_ = m
+}
+
+func TestFlipVerticalReversesRows(t *testing.T) {
+	p := implicitProject(t, 2, 3)
+	p.Layers[0].Buf.Apply([]cellbuf.Change{{Row: 0, Col: 0,
+		After: cellbuf.Cell{G: 'A', Fg: -1}}})
+	m := newTestModel(p, nil)
+
+	m = press(m, "Y")
+	if g := p.Layers[0].Buf.Get(2, 0).G; g != 'A' {
+		t.Fatalf("row0 should move to row2: %U", g)
+	}
+	if g := p.Layers[0].Buf.Get(0, 0).G; g != ' ' {
+		t.Fatalf("row0 should clear: %U", g)
+	}
+	_ = m
+}
+
+func TestFlipWholeIsOneUndo(t *testing.T) {
+	p := implicitProject(t, 4, 1)
+	p.Layers[0].Buf.Apply([]cellbuf.Change{{Row: 0, Col: 0,
+		After: cellbuf.Cell{G: '⠇', Fg: -1}}})
+	m := newTestModel(p, nil)
+
+	m = press(m, "X", "u")
+	if g := p.Layers[0].Buf.Get(0, 0).G; g != '⠇' {
+		t.Fatalf("single undo should restore original: %U", g)
+	}
+	_ = m
+}
+
+func TestFlipSelectionOnly(t *testing.T) {
+	p := implicitProject(t, 4, 1)
+	// '/' в col0, '/' в col3; выделяем col0..col1 → зеркалим только их
+	p.Layers[0].Buf.Apply([]cellbuf.Change{
+		{Row: 0, Col: 0, After: cellbuf.Cell{G: '/', Fg: -1}},
+		{Row: 0, Col: 3, After: cellbuf.Cell{G: '/', Fg: -1}},
+	})
+	m := newTestModel(p, nil)
+	// выделение col0..col1 (курсор в 0,0 → shift+right)
+	m = press(m, "shift+right", "X")
+	if g := p.Layers[0].Buf.Get(0, 1).G; g != '\\' {
+		t.Fatalf("slash in selection should mirror to backslash at col1: %U", g)
+	}
+	if g := p.Layers[0].Buf.Get(0, 3).G; g != '/' {
+		t.Fatalf("slash outside selection must stay: %U", g)
+	}
+	_ = m
 }

@@ -9,3 +9,6 @@
 
 # macOS
 .DS_Store
+
+# curated glyph palettes — kept private (artistic authorship)
+palette/testdata/*.txt

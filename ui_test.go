@@ -170,6 +170,9 @@ func TestPhase2Acceptance(t *testing.T) {
 }`
 	os.WriteFile(filepath.Join(dir, "project.json"), []byte(manifest), 0o644)
 	src, err := os.ReadFile("palette/testdata/palette_nf.txt")
+	if os.IsNotExist(err) {
+		t.Skip("private palette palette_nf.txt absent (gitignored)")
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

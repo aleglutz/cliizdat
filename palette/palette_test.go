@@ -1,6 +1,18 @@
 package palette
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
+
+// requireTestdata пропускает тест, если приватная палитра недоступна
+// (файлы не публикуются — см. .gitignore). Локально даёт полное покрытие.
+func requireTestdata(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		t.Skipf("private palette %s absent (gitignored)", path)
+	}
+}
 
 func countGlyphs(pages []Page) int {
 	n := 0
@@ -13,6 +25,7 @@ func countGlyphs(pages []Page) int {
 }
 
 func TestLoadOctants(t *testing.T) {
+	requireTestdata(t, "testdata/octants.txt")
 	pages, err := Load("testdata/octants.txt")
 	if err != nil {
 		t.Fatal(err)
@@ -39,6 +52,7 @@ func TestLoadOctants(t *testing.T) {
 }
 
 func TestLoadSpecimenSections(t *testing.T) {
+	requireTestdata(t, "testdata/specimen_v2.txt")
 	pages, err := Load("testdata/specimen_v2.txt")
 	if err != nil {
 		t.Fatal(err)
@@ -62,6 +76,7 @@ func TestLoadSpecimenSections(t *testing.T) {
 }
 
 func TestLoadNF(t *testing.T) {
+	requireTestdata(t, "testdata/palette_nf.txt")
 	pages, err := Load("testdata/palette_nf.txt")
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +97,7 @@ func TestLoadNF(t *testing.T) {
 }
 
 func TestCollapseOctantsSinglePageSorted(t *testing.T) {
+	requireTestdata(t, "testdata/octants.txt")
 	pages, err := Load("testdata/octants.txt")
 	if err != nil {
 		t.Fatal(err)

@@ -1134,7 +1134,7 @@ func (m model) viewHelp() string {
 	return b.String()
 }
 
-const wordmark = "༒cliizdat༒"
+const wordmark = "༒ cliizdat ༒"
 
 // frameTop — титул рамки: ╭─ ༒cliizdat༒ file ────╮ на всю ширину терминала.
 func (m model) frameTop() string {

@@ -16,7 +16,8 @@ the grid physically cannot break. Keys just do things — no modes to toggle.
 - Modeless, keyboard-only editing on a fixed cell grid
 - Per-cell 256-color, stored as sparse git-diffable `.color` sidecars
 - Layers with a JSON manifest, knockout halos, solo view
-- Rectangular selection: fill, repaint, copy / cut / paste
+- Rectangular selection: fill, repaint, copy / cut / paste, flip X / Y
+- Braille dot-mode: draw at 2×4 sub-cell resolution, one dot per keystroke
 - Loadable glyph palettes (octants auto-sorted by pixel density)
 - `.ans` export (fg-only, terminal background is the paper)
 - `.dur` import — bring existing durdraw art in, colors and all
@@ -49,6 +50,8 @@ Press `h` in the editor for the full control list.
 | `1`–`9` | stamp slot (fills the selection) |
 | `0` / `x` | erase (slot 0 is always the eraser) |
 | `y` `d` `p` | copy · cut · paste |
+| `X` / `Y` | flip selection/layer horizontally · vertically (mirrors glyphs) |
+| `b` | braille dot-mode: arrows move per dot, `.` toggles the dot |
 | `c` / `C` / `r` | color picker · eyedropper · repaint |
 | `Tab` | glyph palette → slot |
 | `[` `]` / `v` | prev/next layer · solo |

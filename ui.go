@@ -58,6 +58,8 @@ type model struct {
 	dotOn      bool
 	dotR, dotC int // суб-позиция точки в ячейке: ряд 0..3, столбец 0..1
 
+	lightBg bool // терминал со светлым фоном: серую рампу fg отражаем
+
 	selOn      bool
 	selSticky  bool // выделение от `s`: стрелки растят, не сбрасывают
 	selR, selC int  // якорь выделения
@@ -96,7 +98,18 @@ func newModel(p *project.Project, pal []palette.Page) model {
 		curFg:    p.Layers[0].Fg,
 		lastSlot: 1,
 		termW:    80, termH: 24,
+		lightBg: !lipgloss.HasDarkBackground(),
 	}
+}
+
+// adaptFg отражает серую рампу (232–255) вокруг середины на светлом фоне:
+// «еле-видимость» задаётся дистанцией от фона, а фон при смене темы
+// инвертируется. Цветные индексы (0–231) не трогаются. -1 = дефолт.
+func (m model) adaptFg(fg int) int {
+	if m.lightBg && fg >= 232 && fg <= 255 {
+		return 487 - fg // 232+255-fg
+	}
+	return fg
 }
 
 func (m model) Init() tea.Cmd { return nil }
@@ -957,7 +970,7 @@ func (m model) View() string {
 				}
 				st := lipgloss.NewStyle()
 				if vc.fg >= 0 {
-					st = st.Foreground(lipgloss.Color(strconv.Itoa(vc.fg)))
+					st = st.Foreground(lipgloss.Color(strconv.Itoa(m.adaptFg(vc.fg))))
 				}
 				if !m.solo && vc.layer >= 0 && vc.layer != m.active {
 					st = st.Faint(true)
@@ -1196,7 +1209,7 @@ func (m model) statusBar() string {
 		swatch := statusStyle.Render("■")
 		if m.curFg >= 0 {
 			swatch = lipgloss.NewStyle().
-				Background(lipgloss.Color(strconv.Itoa(m.curFg))).Render(" ")
+				Background(lipgloss.Color(strconv.Itoa(m.adaptFg(m.curFg)))).Render(" ")
 		}
 		return statusStyle.Render(left) + swatch + statusStyle.Render(right)
 	}

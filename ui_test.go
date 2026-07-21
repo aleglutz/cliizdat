@@ -522,3 +522,33 @@ func TestFlipSelectionOnly(t *testing.T) {
 	}
 	_ = m
 }
+
+// ── light-bg grayscale reflection (Phase 4a) ───────────────────────────
+
+func TestAdaptFgReflectsGrayOnLight(t *testing.T) {
+	p := implicitProject(t, 4, 2)
+	m := newTestModel(p, nil)
+
+	m.lightBg = false
+	for _, fg := range []int{240, 246, 232, 255, 231, 15, -1} {
+		if got := m.adaptFg(fg); got != fg {
+			t.Fatalf("dark bg: adaptFg(%d)=%d, want unchanged", fg, got)
+		}
+	}
+
+	m.lightBg = true
+	cases := map[int]int{
+		246: 241, // drawing → darker (stronger on light)
+		240: 247, // texture → lighter (recedes into paper)
+		232: 255, // ramp ends swap
+		255: 232,
+		231: 231, // colored: untouched
+		15:  15,
+		-1:  -1, // default: untouched
+	}
+	for fg, want := range cases {
+		if got := m.adaptFg(fg); got != want {
+			t.Fatalf("light bg: adaptFg(%d)=%d, want %d", fg, got, want)
+		}
+	}
+}

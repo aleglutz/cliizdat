@@ -20,6 +20,9 @@ the grid physically cannot break. Keys just do things — no modes to toggle.
 - Braille dot-mode: draw at 2×4 sub-cell resolution, one dot per keystroke
 - Loadable glyph palettes (octants auto-sorted by pixel density)
 - `.ans` export (fg-only, terminal background is the paper)
+- Theme-adaptive grayscale: on a light terminal the gray ramp (256-color
+  232–255) is reflected around its midpoint, so faint two-tone art keeps its
+  contrast when the paper flips from black to white — one file, both themes
 - `.dur` import — bring existing durdraw art in, colors and all
 - Width authority is [go-runewidth](https://github.com/mattn/go-runewidth),
   never libc `wcwidth`

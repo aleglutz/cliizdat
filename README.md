@@ -72,3 +72,9 @@ layers/
 
 Coordinates are 1-based everywhere in the UI, manifest, and sidecars. Saving
 strips trailing spaces, enforces LF, and sorts sidecars by row,col.
+
+Opening a bare `.txt` is an *implicit project*. On the first save it is
+promoted to a manifest: a sibling `<name>.json` is written capturing the
+canvas size, palette, and slots — so a resized canvas (whose empty margins
+a bare `.txt` cannot record) persists. Reopening the same `.txt` afterwards
+picks the manifest up automatically.

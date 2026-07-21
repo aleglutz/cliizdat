@@ -54,6 +54,11 @@ func Load(path string) (*Project, error) {
 	if strings.HasSuffix(path, ".json") {
 		return loadManifest(path)
 	}
+	// если рядом лежит манифест, ссылающийся на этот слой (создан прошлым `w`),
+	// открываем его — так холст/палитра/слоты переживают reopen голого txt.
+	if mp := siblingManifest(path); mp != "" {
+		return loadManifest(mp)
+	}
 	buf, err := cellbuf.Load(path)
 	if err != nil {
 		return nil, err
@@ -69,6 +74,32 @@ func Load(path string) (*Project, error) {
 		Layers:  []*Layer{{File: filepath.Base(path), AbsPath: abs, Fg: -1, Buf: buf}},
 		Slots:   DefaultSlots,
 	}, nil
+}
+
+// manifestPath — путь json-манифеста рядом с txt-слоем: <base>.json.
+func manifestPath(txtPath string) string {
+	return strings.TrimSuffix(txtPath, filepath.Ext(txtPath)) + ".json"
+}
+
+// siblingManifest возвращает путь <base>.json, если тот существует и ссылается
+// на этот txt как на слой; иначе "".
+func siblingManifest(txtPath string) string {
+	mp := manifestPath(txtPath)
+	data, err := os.ReadFile(mp)
+	if err != nil {
+		return ""
+	}
+	var m manifest
+	if json.Unmarshal(data, &m) != nil {
+		return ""
+	}
+	want := filepath.Base(txtPath)
+	for _, L := range m.Layers {
+		if filepath.Base(L.File) == want {
+			return mp
+		}
+	}
+	return ""
 }
 
 func loadManifest(path string) (*Project, error) {
@@ -199,6 +230,12 @@ func (p *Project) SaveAll() error {
 			return err
 		}
 		L.NewFile = false
+	}
+	// промоушен implicit → manifest при первом сохранении: заводим json рядом
+	// с первым слоем, чтобы холст/палитра/слоты персистились впредь.
+	if p.Path == "" && len(p.Layers) > 0 {
+		p.Path = manifestPath(p.Layers[0].AbsPath)
+		p.ManifestDirty = true
 	}
 	if p.ManifestDirty && p.Path != "" {
 		if err := p.SaveManifest(); err != nil {

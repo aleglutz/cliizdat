@@ -176,3 +176,62 @@ func TestManifestSlotZeroForcedToSpace(t *testing.T) {
 		t.Fatalf("manifest slot 0 = %U; want space", p.Slots[0])
 	}
 }
+
+// ── implicit → manifest promotion on first save ─────────────────────────
+
+func TestPromoteImplicitOnSave(t *testing.T) {
+	dir := t.TempDir()
+	txt := filepath.Join(dir, "chandelier.txt")
+	os.WriteFile(txt, []byte("AB\nCD\n"), 0o644)
+
+	p, err := Load(txt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Path != "" {
+		t.Fatalf("bare txt should load implicit (Path empty), got %q", p.Path)
+	}
+	p.Resize(80, 45)
+	if err := p.SaveAll(); err != nil {
+		t.Fatal(err)
+	}
+	json := filepath.Join(dir, "chandelier.json")
+	if _, err := os.Stat(json); err != nil {
+		t.Fatalf("first save should create %s: %v", json, err)
+	}
+	if p.Path != json {
+		t.Fatalf("project should adopt manifest path, got %q", p.Path)
+	}
+
+	// reopen via the bare txt → sibling manifest adopted, canvas persists
+	p2, err := Load(txt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p2.Path != json {
+		t.Fatalf("reopening bare txt should adopt sibling manifest, got %q", p2.Path)
+	}
+	if p2.CanvasW != 80 || p2.CanvasH != 45 {
+		t.Fatalf("canvas did not persist: %dx%d, want 80x45", p2.CanvasW, p2.CanvasH)
+	}
+}
+
+func TestSiblingManifestIgnoredWhenUnrelated(t *testing.T) {
+	dir := t.TempDir()
+	txt := filepath.Join(dir, "solo.txt")
+	os.WriteFile(txt, []byte("X\n"), 0o644)
+	// манифест-однофамилец, но ссылается на другой слой → не подхватывать
+	os.WriteFile(filepath.Join(dir, "solo.json"),
+		[]byte(`{"canvas":[99,99],"layers":[{"file":"other.txt","at":[1,1]}]}`), 0o644)
+
+	p, err := Load(txt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Path != "" {
+		t.Fatalf("unrelated manifest must be ignored, got Path %q", p.Path)
+	}
+	if p.CanvasW != 1 {
+		t.Fatalf("should load bare txt (W=1), got %d", p.CanvasW)
+	}
+}

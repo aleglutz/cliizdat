@@ -1136,20 +1136,21 @@ func (m model) viewHelp() string {
 
 const wordmark = "༒ cliizdat༒"
 
-// frameTop — титул рамки: ╭─ ༒cliizdat༒ file ────╮ на всю ширину терминала.
+// frameTop — титул рамки: ╭─ ༒ cliizdat༒ ─── file ────╮ на всю ширину терминала.
 func (m model) frameTop() string {
 	name := m.proj.Path
 	if name == "" {
 		name = m.layer().AbsPath
 	}
-	title := " " + filepath.Base(name) + " "
-	used := runewidth.StringWidth("╭─ "+wordmark+title) + 1 // +╮
+	const sep = " ─── "
+	tail := filepath.Base(name) + " "
+	used := runewidth.StringWidth("╭─ "+wordmark+sep+tail) + 1 // +╮
 	fill := m.termW - used
 	if fill < 0 {
 		fill = 0
 	}
-	return frameStyle.Render("╭─ ") + markStyle.Render(wordmark) + title +
-		frameStyle.Render(strings.Repeat("─", fill)+"╮")
+	return frameStyle.Render("╭─ ") + markStyle.Render(wordmark) + frameStyle.Render(sep) +
+		tail + frameStyle.Render(strings.Repeat("─", fill)+"╮")
 }
 
 func (m model) statusBar() string {

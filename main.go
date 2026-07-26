@@ -15,8 +15,9 @@ import (
 )
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: cliizdat [-p palette.txt] <project.json | layer.txt | file.dur>")
+	fmt.Fprintln(os.Stderr, "usage: cliizdat [-p palette.txt] <project.json | layer.txt | file.dur | file.ans>")
 	fmt.Fprintln(os.Stderr, "       cliizdat new [-s WxH] [-p pal.txt,...] <name>")
+	fmt.Fprintln(os.Stderr, "       cliizdat clip [-fg N] [-raw] [file|-]")
 }
 
 func main() {
@@ -27,6 +28,13 @@ func main() {
 			os.Exit(1)
 		}
 		open(path, "")
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "clip" {
+		if err := clipCmd(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "cliizdat:", err)
+			os.Exit(1)
+		}
 		return
 	}
 	palFlag := flag.String("p", "", "palette file (для implicit-проекта из layer.txt)")
@@ -97,9 +105,12 @@ func parseSize(s string) (int, int, error) {
 func open(arg, palOverride string) {
 	var proj *project.Project
 	var err error
-	if strings.HasSuffix(arg, ".dur") {
+	switch {
+	case strings.HasSuffix(arg, ".dur"):
 		proj, err = project.ImportDur(arg)
-	} else {
+	case strings.HasSuffix(arg, ".ans"):
+		proj, err = project.ImportANS(arg)
+	default:
 		proj, err = project.Load(arg)
 	}
 	if err != nil {

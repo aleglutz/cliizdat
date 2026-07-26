@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/aleglutz/cliizdat/cellbuf"
@@ -73,8 +72,6 @@ func ImportDur(path string) (*Project, error) {
 			w = len(rows[r])
 		}
 	}
-	buf := cellbuf.New(w, h)
-
 	// colorMap транспонирован: [col][row]. fg 1–16 — палитра durdraw.
 	fgAt := func(r, c int) int {
 		if c >= len(fr.ColorMap) || r >= len(fr.ColorMap[c]) || len(fr.ColorMap[c][r]) == 0 {
@@ -87,46 +84,18 @@ func ImportDur(path string) (*Project, error) {
 		return fg
 	}
 
-	freq := map[int]int{}
-	var group []cellbuf.Change
-	for r := 0; r < h; r++ {
+	grid := make([][]cellbuf.Cell, h)
+	for r := range grid {
+		grid[r] = make([]cellbuf.Cell, w)
+		for c := range grid[r] {
+			grid[r][c] = cellbuf.Blank
+		}
 		for c, g := range rows[r] {
 			if g == ' ' {
 				continue
 			}
-			fg := fgAt(r, c)
-			freq[fg]++
-			group = append(group, cellbuf.Change{Row: r, Col: c, After: cellbuf.Cell{G: g, Fg: fg}})
+			grid[r][c] = cellbuf.Cell{G: g, Fg: fgAt(r, c)}
 		}
 	}
-	if len(group) == 0 {
-		return nil, fmt.Errorf("%s: кадр пуст", path)
-	}
-	base, best := -1, 0
-	for fg, n := range freq {
-		if n > best || (n == best && fg < base) {
-			base, best = fg, n
-		}
-	}
-	for i := range group {
-		if group[i].After.Fg == base {
-			group[i].After.Fg = -1
-		}
-	}
-	buf.Apply(group)
-
-	abs, _ := filepath.Abs(path)
-	stem := strings.TrimSuffix(abs, filepath.Ext(abs))
-	if _, err := os.Stat(stem + ".txt"); err == nil {
-		return nil, fmt.Errorf("%s.txt уже существует — импорт перезаписал бы его", stem)
-	}
-	return &Project{
-		Path:          stem + ".json",
-		Dir:           filepath.Dir(abs),
-		CanvasW:       w,
-		CanvasH:       h,
-		Layers:        []*Layer{{File: filepath.Base(stem) + ".txt", AbsPath: stem + ".txt", Fg: base, Buf: buf, NewFile: true}},
-		Slots:         DefaultSlots,
-		ManifestDirty: true,
-	}, nil
+	return implicitFromCells(path, grid)
 }

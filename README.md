@@ -24,6 +24,8 @@ the grid physically cannot break. Keys just do things — no modes to toggle.
   232–255) is reflected around its midpoint, so faint two-tone art keeps its
   contrast when the paper flips from black to white — one file, both themes
 - `.dur` import — bring existing durdraw art in, colors and all
+- ANSI import — open `.ans` art, or pipe a `tdfiglet` banner straight into the
+  copy buffer and stamp it at the cursor with `p`
 - Width authority is [go-runewidth](https://github.com/mattn/go-runewidth),
   never libc `wcwidth`
 
@@ -44,7 +46,12 @@ cliizdat new -p pal.txt sigil  # explicit palettes (files or directories, comma-
 cliizdat project.json          # a manifest project
 cliizdat layer.txt             # a single layer (implicit project)
 cliizdat art.dur               # import durdraw art
+cliizdat art.ans               # import ANSI art
 cliizdat -p palette.txt file   # attach a glyph palette
+
+tdfiglet -f incorped.tdf A | cliizdat clip           # banner → copy buffer, paste with p
+tdfiglet -f incorped.tdf A | cliizdat clip -fg 246   # …flattened to one color
+cliizdat clip -raw art.ans                           # keep the empty margins
 ```
 
 `new` writes `<name>.json` (canvas, slots, palettes) and opens it; the layer
@@ -103,6 +110,20 @@ it when another instance wrote last. So an element yanked in one terminal tab
 pastes into a project open in another, glyphs and colors intact, and survives
 quitting. Location: `$CLIIZDAT_CLIPBOARD`, else
 `${XDG_CACHE_HOME:-~/.cache}/cliizdat/clipboard.json`.
+
+`cliizdat clip [-fg N] [-raw] [file|-]` fills that same buffer from an ANSI
+stream, so any external generator becomes a paste: run it in one terminal tab,
+press `p` in the editor open in another. It understands SGR (16-color, bright,
+bold-as-bright, `38;5;N`), `CR`/`LF`, `ESC[nC`, strips a trailing SAUCE record,
+and reads non-UTF-8 input as CP437. Empty margins are cropped so the banner
+lands under the cursor; `-raw` keeps them.
+
+A cell has a foreground only — the terminal background is the paper — so an
+imported `(glyph, fg, bg)` triple is reduced: a black background is dropped, a
+space on a colored background becomes `█` in that color, `█` hides whatever is
+behind it, and anything else keeps its foreground. Only the last case loses
+information: half blocks and shades over a colored background come in as one
+tone instead of two.
 
 Opening a bare `.txt` is an *implicit project*. On the first save it is
 promoted to a manifest: a sibling `<name>.json` is written capturing the

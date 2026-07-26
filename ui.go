@@ -64,7 +64,8 @@ type model struct {
 	selSticky  bool // выделение от `s`: стрелки растят, не сбрасывают
 	selR, selC int  // якорь выделения
 
-	clip [][]cellbuf.Cell // copy/paste; Fg — эффективный цвет источника
+	clip   [][]cellbuf.Cell // copy/paste; Fg — эффективный цвет источника
+	clipID string           // id нашей последней записи в общий буфер
 
 	mode   uiMode
 	input  string
@@ -262,7 +263,8 @@ func (m model) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.status = "fg " + fgLabel(m.curFg)
 	case "tab":
 		if len(m.pal) == 0 {
-			m.status = "палитра не загружена (нет \"palette\" в манифесте)"
+			m.status = "палитра не найдена: ни в манифесте, ни в $CLIIZDAT_PALETTES, " +
+				"ни в palettes/ вверх по дереву, ни в ~/.config/cliizdat/palettes"
 		} else {
 			m.mode = modePalette
 			m.ppSlot = m.lastSlot
@@ -642,11 +644,19 @@ func (m *model) yank(cut bool) {
 		verb = "cut"
 	}
 	m.status = fmt.Sprintf("%s %dx%d", verb, c2-c1+1, r2-r1+1)
+	// буфер уезжает в файл — его увидят другие вкладки; сбой не мешает работе
+	id, err := writeClip(clip)
+	if err != nil {
+		m.status += " (общий буфер: " + err.Error() + ")"
+		return
+	}
+	m.clipID = id
 }
 
 // paste ставит буфер левым верхним углом в курсор; пробелы прозрачны,
 // один шаг undo. Эффективный fg сворачивается обратно в override/базу слоя.
 func (m *model) paste() {
+	foreign := m.syncClip()
 	if len(m.clip) == 0 {
 		m.status = "буфер пуст"
 		return
@@ -676,6 +686,27 @@ func (m *model) paste() {
 	}
 	L.Buf.Apply(group)
 	m.status = fmt.Sprintf("paste %dx%d", len(m.clip[0]), len(m.clip))
+	if foreign {
+		m.status += " ← общий буфер"
+	}
+}
+
+// syncClip подтягивает буфер, если в файле лежит не наша запись (другая вкладка
+// сделала y/d) или если своего буфера ещё нет. Возвращает true, когда вставлять
+// будем чужое.
+func (m *model) syncClip() bool {
+	clip, id, err := readClip()
+	if err != nil {
+		if len(m.clip) == 0 && !os.IsNotExist(err) {
+			m.status = "общий буфер: " + err.Error()
+		}
+		return false
+	}
+	if id != "" && id == m.clipID {
+		return false
+	}
+	m.clip, m.clipID = clip, id
+	return true
 }
 
 // ── goto / quit prompts ────────────────────────────────────────────────
@@ -1093,7 +1124,7 @@ var helpRows = [][2]string{
 	{"", ""},
 	{"1–9", "stamp slot (fills the selection)"},
 	{"0 / x", "erase (slot 0 is always the eraser)"},
-	{"y d p", "copy · cut · paste"},
+	{"y d p", "copy · cut · paste (buffer is shared with other cliizdat windows)"},
 	{"b", "braille dot-mode: arrows move per dot, `.` toggles"},
 	{"X Y", "flip selection/layer horizontally · vertically (mirrors glyphs)"},
 	{"", ""},
@@ -1228,8 +1259,9 @@ func (m model) viewPalette() string {
 	}
 	fmt.Fprintf(&b, " palette: %s%s  →  slot %d %c   [1-9 слот · Enter взять · Esc]\n\n",
 		page.Name, pages, m.ppSlot, m.proj.Slots[m.ppSlot])
-	// окно строк, чтобы длинные секции влезали
-	vh := max(1, m.termH-4)
+	// окно строк, чтобы длинные секции влезали; ряд занимает две строки —
+	// пустая под ним разлепляет блочные глифы, которые иначе сливаются в массу
+	vh := max(1, (m.termH-4)/2)
 	start := 0
 	if m.ppRow >= vh {
 		start = m.ppRow - vh + 1
@@ -1244,7 +1276,7 @@ func (m model) viewPalette() string {
 			}
 			b.WriteString(cell)
 		}
-		b.WriteByte('\n')
+		b.WriteString("\n\n")
 	}
 	return b.String()
 }

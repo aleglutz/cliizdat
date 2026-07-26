@@ -182,7 +182,7 @@ func TestPhase2Acceptance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pal, err := palette.Load(p.PalettePath)
+	pal, err := palette.LoadAll(p.PalettePaths)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -550,5 +550,142 @@ func TestAdaptFgReflectsGrayOnLight(t *testing.T) {
 		if got := m.adaptFg(fg); got != want {
 			t.Fatalf("light bg: adaptFg(%d)=%d, want %d", fg, got, want)
 		}
+	}
+}
+
+// Новый проект: холст 80×55, все палитры в пикере, Tab листает страницы.
+func TestNewProjectPicker(t *testing.T) {
+	dir := t.TempDir()
+	pals := filepath.Join(dir, "palettes")
+	os.MkdirAll(pals, 0o755)
+	os.WriteFile(filepath.Join(pals, "a_braille.txt"), []byte("== BRAILLE ==\n⠁⠂⠄\n"), 0o644)
+	os.WriteFile(filepath.Join(pals, "b_octants.txt"), []byte("== OCTANTS ==\n\U0001CD00 \U0001CD01\n"), 0o644)
+	wd, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(wd)
+
+	path, err := project.New("sigil", project.DefaultCanvasW, project.DefaultCanvasH, project.DiscoverPalettes(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := project.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pal, err := palette.LoadAll(p.PalettePaths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.CanvasW != 80 || p.CanvasH != 55 {
+		t.Fatalf("холст %dx%d", p.CanvasW, p.CanvasH)
+	}
+	m := newTestModel(p, pal)
+	m.termW, m.termH = 100, 40
+	m = press(m, "tab")
+	if m.mode != modePalette {
+		t.Fatal("пикер не открылся")
+	}
+	if !strings.Contains(m.View(), "BRAILLE") || !strings.Contains(m.View(), "(1/2, Tab)") {
+		t.Errorf("первая страница/счётчик не показаны:\n%s", m.View())
+	}
+	m = press(m, "tab")
+	if !strings.Contains(m.View(), "OCTANTS") {
+		t.Errorf("Tab не пролистал на октанты:\n%s", m.View())
+	}
+}
+
+// Общий буфер: `y` в одном инстансе → `p` в другом (соседняя вкладка терминала).
+func TestSharedClipboardBetweenInstances(t *testing.T) {
+	t.Setenv("CLIIZDAT_CLIPBOARD", filepath.Join(t.TempDir(), "clipboard.json"))
+
+	// вкладка A: рисуем 2 глифа цветом 208 и копируем их
+	pa := implicitProject(t, 6, 3)
+	a := newTestModel(pa, nil)
+	a.termW, a.termH = 60, 12
+	a.curFg = 208
+	a = press(a, "1", "9")                      // █ · в 0,0 и 0,1
+	a = press(a, "left", "left", "shift+right") // выделение 2x1 от 0,0
+	a = press(a, "y")
+	if len(a.clip) != 1 || len(a.clip[0]) != 2 {
+		t.Fatalf("yank %dx%d", len(a.clip[0]), len(a.clip))
+	}
+
+	// вкладка B: свой проект, своя память — буфер приходит из файла
+	pb := implicitProject(t, 6, 3)
+	b := newTestModel(pb, nil)
+	b.termW, b.termH = 60, 12
+	b = press(b, "down", "p")
+	buf := pb.Layers[0].Buf
+	if g := buf.Get(1, 0).G; g != '█' {
+		t.Fatalf("вставка не пришла: %U", g)
+	}
+	if g := buf.Get(1, 1).G; g != '·' {
+		t.Fatalf("второй глиф: %U", g)
+	}
+	if fg := buf.Get(1, 0).Fg; fg != 208 {
+		t.Fatalf("цвет потерян: %d", fg)
+	}
+	if !strings.Contains(b.status, "общий буфер") {
+		t.Errorf("статус не отметил чужой буфер: %q", b.status)
+	}
+	b = press(b, "u")
+	if buf.Get(1, 0).G != ' ' || buf.Get(1, 1).G != ' ' {
+		t.Error("вставка не откатилась одним undo")
+	}
+
+	// своя копия в B перебивает файл; A после этого видит уже её
+	b = press(b, "esc", "2")
+	b = press(b, "left", "y")
+	a = press(a, "down", "down", "p")
+	if len(a.clip) != 1 || len(a.clip[0]) != 1 || a.clip[0][0].G != '▀' {
+		t.Fatalf("A не подхватил свежий буфер B: %+v", a.clip)
+	}
+	found := false
+	for c := 0; c < pa.Layers[0].Buf.W; c++ {
+		if pa.Layers[0].Buf.Get(2, c).G == '▀' {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("A не вставил свежий буфер B")
+	}
+}
+
+// Свой же буфер после y не перечитывается как чужой.
+func TestClipboardOwnWriteNotForeign(t *testing.T) {
+	t.Setenv("CLIIZDAT_CLIPBOARD", filepath.Join(t.TempDir(), "clipboard.json"))
+	p := implicitProject(t, 5, 3)
+	m := newTestModel(p, nil)
+	m.termW, m.termH = 60, 12
+	m = press(m, "1", "left", "y", "down", "p")
+	if strings.Contains(m.status, "общий буфер") {
+		t.Errorf("своя запись помечена чужой: %q", m.status)
+	}
+}
+
+// Пикер разлепляет ряды пустой строкой — иначе блочные глифы сливаются в массу.
+func TestPickerBlankRowBetweenGlyphRows(t *testing.T) {
+	pal := []palette.Page{{Name: "P", Rows: [][]rune{
+		{'█', '▀'}, {'▄', '▌'}, {'▐', '░'},
+	}}}
+	m := newTestModel(implicitProject(t, 5, 3), pal)
+	m.termW, m.termH = 40, 20
+	m = press(m, "tab")
+	lines := strings.Split(m.viewPalette(), "\n")
+	if len(lines) < 7 {
+		t.Fatalf("вид короче ожидаемого:\n%s", m.viewPalette())
+	}
+	if !strings.Contains(lines[2], "█") || lines[3] != "" || !strings.Contains(lines[4], "▄") {
+		t.Fatalf("ряды не разлеплены:\n%q", lines[:6])
+	}
+	// окно прокрутки считает ряд за две строки
+	m.termH = 8
+	m.ppRow = 2
+	view := m.viewPalette()
+	if strings.Count(view, "\n") > 8 {
+		t.Fatalf("окно не ужалось под высоту:\n%s", view)
+	}
+	if !strings.Contains(view, "▐") {
+		t.Fatalf("текущий ряд вне окна:\n%s", view)
 	}
 }

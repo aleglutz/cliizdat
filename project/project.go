@@ -31,7 +31,7 @@ type Project struct {
 	CanvasH       int
 	Layers        []*Layer
 	Slots         [10]rune // индекс = клавиша-цифра
-	PalettePath   string   // абсолютный; "" = нет
+	PalettePaths  []string // абсолютные; nil = нет
 	ManifestDirty bool
 }
 
@@ -46,7 +46,32 @@ type manifest struct {
 	Canvas  [2]int          `json:"canvas"`
 	Layers  []manifestLayer `json:"layers"`
 	Slots   []string        `json:"slots"`
-	Palette string          `json:"palette"`
+	Palette json.RawMessage `json:"palette"` // строка или массив строк
+}
+
+// paletteList принимает обе формы поля "palette": "pal.txt" и ["a.txt","b.txt"].
+func paletteList(raw json.RawMessage) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var one string
+	if json.Unmarshal(raw, &one) == nil {
+		if one == "" {
+			return nil
+		}
+		return []string{one}
+	}
+	var many []string
+	if json.Unmarshal(raw, &many) != nil {
+		return nil
+	}
+	var out []string
+	for _, s := range many {
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // Load открывает project.json или одиночный layer.txt (implicit project).
@@ -137,8 +162,8 @@ func loadManifest(path string) (*Project, error) {
 		p.Slots[(i+1)%10] = runes[0] // манифест: слоты 1..9, потом 0
 	}
 	p.Slots[0] = ' ' // слот 0 — всегда ластик, что бы ни было в манифесте
-	if m.Palette != "" {
-		p.PalettePath = absJoin(dir, m.Palette)
+	for _, rel := range paletteList(m.Palette) {
+		p.PalettePaths = append(p.PalettePaths, absJoin(dir, rel))
 	}
 	for _, ml := range m.Layers {
 		L := &Layer{
@@ -178,6 +203,23 @@ func loadManifest(path string) (*Project, error) {
 		return nil, fmt.Errorf("%s: манифест без слоёв", path)
 	}
 	return p, nil
+}
+
+// relPalette — путь палитры относительно манифеста; наружу от Dir пишем абсолютом.
+func (p *Project) relPalette(abs string) string {
+	rel, err := filepath.Rel(p.Dir, abs)
+	if err == nil && !strings.HasPrefix(rel, "..") {
+		return rel
+	}
+	// macOS: /tmp и /var — симлинки, из-за них соседний каталог выглядит «наружу»
+	dirEval, e1 := filepath.EvalSymlinks(p.Dir)
+	absEval, e2 := filepath.EvalSymlinks(abs)
+	if e1 == nil && e2 == nil {
+		if rel, err := filepath.Rel(dirEval, absEval); err == nil && !strings.HasPrefix(rel, "..") {
+			return rel
+		}
+	}
+	return abs
 }
 
 func absJoin(dir, rel string) string {
@@ -278,13 +320,22 @@ func (p *Project) SaveManifest() error {
 		}
 	}
 	sb.WriteString("]")
-	if p.PalettePath != "" {
-		rel, err := filepath.Rel(p.Dir, p.PalettePath)
-		if err != nil || strings.HasPrefix(rel, "..") {
-			rel = p.PalettePath
-		}
-		pal, _ := json.Marshal(rel)
+	switch len(p.PalettePaths) {
+	case 0:
+	case 1:
+		pal, _ := json.Marshal(p.relPalette(p.PalettePaths[0]))
 		fmt.Fprintf(&sb, ",\n  \"palette\": %s", pal)
+	default:
+		sb.WriteString(",\n  \"palette\": [\n")
+		for i, abs := range p.PalettePaths {
+			pal, _ := json.Marshal(p.relPalette(abs))
+			fmt.Fprintf(&sb, "    %s", pal)
+			if i < len(p.PalettePaths)-1 {
+				sb.WriteString(",")
+			}
+			sb.WriteString("\n")
+		}
+		sb.WriteString("  ]")
 	}
 	sb.WriteString("\n}\n")
 	return os.WriteFile(p.Path, []byte(sb.String()), 0o644)

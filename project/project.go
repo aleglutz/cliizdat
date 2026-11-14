@@ -12,7 +12,7 @@ import (
 )
 
 // DefaultSlots: индекс = клавиша-цифра, 0 = пробел/ластик.
-var DefaultSlots = [10]rune{' ', '█', '▀', '▄', '\U0001CD00', '\U0001CD35', '\U0001CDAB', '🮕', '🮖', '·'}
+var DefaultSlots = [10]rune{' ', '⣿', '█', '⡇', '▌', '⢸', '▐', '⠛', '▀', '·'}
 
 type Layer struct {
 	File     string // как в манифесте (относительный)

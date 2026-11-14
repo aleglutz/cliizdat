@@ -63,7 +63,7 @@ func implicitProject(t *testing.T, w, h int) *project.Project {
 		Dir:     dir,
 		CanvasW: w, CanvasH: h,
 		Layers: []*project.Layer{{File: "l.txt", AbsPath: path, Fg: -1, Buf: cellbuf.New(w, h), NewFile: true}},
-		Slots:  project.DefaultSlots,
+		Slots:  [10]rune{' ', '█', '▀', '▄', '\U0001CD00', '\U0001CD35', '\U0001CDAB', '🮕', '🮖', '·'},
 	}
 }
 

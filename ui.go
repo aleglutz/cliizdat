@@ -1228,6 +1228,7 @@ var helpRows = [][2]string{
 	{"y d p", "copy · cut · paste (buffer is shared with other cliizdat windows)"},
 	{"b / o", "dot-mode on the 2×4 grid: braille · octant blocks"},
 	{"", "arrows move per dot, `.` toggles, b/o switch raster"},
+	{".", "stamp bit in b/o mode"},
 	{"X Y", "flip selection/layer horizontally · vertically (mirrors glyphs)"},
 	{"", ""},
 	{"c", "256-color picker"},

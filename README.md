@@ -87,7 +87,8 @@ Press `h` in the editor for the full control list.
 | `0` / `x` | erase (slot 0 is always the eraser) |
 | `y` `d` `p` | copy · cut · paste (shared between running instances) |
 | `X` / `Y` | flip selection/layer horizontally · vertically (mirrors glyphs) |
-| `b` | braille dot-mode: arrows move per dot, `.` toggles the dot |
+| `b` / `o` | dot-mode on the 2×4 grid: braille · octant blocks; arrows move per dot, the same key or `Esc` leaves, the other key switches raster |
+| `.` | stamp bit in b/o mode (toggles the dot under the cursor) |
 | `c` / `C` / `r` | color picker · eyedropper · repaint |
 | `Tab` | glyph palette → slot |
 | `[` `]` / `v` | prev/next layer · solo |

@@ -829,3 +829,31 @@ func TestPickerBlankRowBetweenGlyphRows(t *testing.T) {
 		t.Fatalf("текущий ряд вне окна:\n%s", view)
 	}
 }
+
+func TestCompositeOverstrikeLayer(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("⠁▌#\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "b.txt"), []byte("⠈▐E\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "project.json"), []byte(`{
+  "canvas": [3, 1],
+  "layers": [
+    {"file": "a.txt", "at": [1, 1], "fg": 240},
+    {"file": "b.txt", "at": [1, 1], "fg": 231, "overstrike": true}
+  ]
+}`), 0o644)
+	p, err := project.Load(filepath.Join(dir, "project.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newTestModel(p, nil)
+	for c, want := range []rune{'⠉', '█', 'E'} {
+		vc := m.compositeCell(0, c)
+		if vc.g != want || vc.fg != 231 {
+			t.Fatalf("ячейка %d: got %c fg %d, want %c fg 231", c, vc.g, vc.fg, want)
+		}
+	}
+	m.solo = true
+	if vc := m.compositeCell(0, 0); vc.g != '⠁' {
+		t.Fatalf("solo нижнего слоя: got %c, want ⠁", vc.g)
+	}
+}

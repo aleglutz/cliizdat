@@ -20,8 +20,11 @@ type Layer struct {
 	AtR, AtC int // 0-based внутренние
 	Fg       int // -1 = терминальный default
 	Knockout int
-	Buf      *cellbuf.Buffer
-	NewFile  bool
+	// Overstrike: брайль/октант слоя сливается с глифом того же семейства
+	// под ним, а не заменяет его.
+	Overstrike bool
+	Buf        *cellbuf.Buffer
+	NewFile    bool
 }
 
 type Project struct {
@@ -36,10 +39,11 @@ type Project struct {
 }
 
 type manifestLayer struct {
-	File     string `json:"file"`
-	At       [2]int `json:"at"`
-	Fg       *int   `json:"fg"`
-	Knockout int    `json:"knockout"`
+	File       string `json:"file"`
+	At         [2]int `json:"at"`
+	Fg         *int   `json:"fg"`
+	Knockout   int    `json:"knockout"`
+	Overstrike bool   `json:"overstrike"`
 }
 
 type manifest struct {
@@ -167,12 +171,13 @@ func loadManifest(path string) (*Project, error) {
 	}
 	for _, ml := range m.Layers {
 		L := &Layer{
-			File:     ml.File,
-			AbsPath:  absJoin(dir, ml.File),
-			AtR:      ml.At[0] - 1,
-			AtC:      ml.At[1] - 1,
-			Fg:       -1,
-			Knockout: ml.Knockout,
+			File:       ml.File,
+			AbsPath:    absJoin(dir, ml.File),
+			AtR:        ml.At[0] - 1,
+			AtC:        ml.At[1] - 1,
+			Fg:         -1,
+			Knockout:   ml.Knockout,
+			Overstrike: ml.Overstrike,
 		}
 		if L.AtR < 0 {
 			L.AtR = 0
@@ -305,6 +310,9 @@ func (p *Project) SaveManifest() error {
 		if L.Knockout > 0 {
 			fmt.Fprintf(&sb, ", \"knockout\": %d", L.Knockout)
 		}
+		if L.Overstrike {
+			sb.WriteString(", \"overstrike\": true")
+		}
 		sb.WriteString("}")
 		if i < len(p.Layers)-1 {
 			sb.WriteString(",")
@@ -402,7 +410,11 @@ func (p *Project) ExportANS() []byte {
 			}
 		}
 		for _, cl := range cells {
-			put(cl.y, cl.x, cl.ch, cl.fg)
+			ch := cl.ch
+			if L.Overstrike && cl.y < len(canvas) && cl.x < len(canvas[cl.y]) {
+				ch, _ = cellbuf.Overstrike(canvas[cl.y][cl.x].ch, ch)
+			}
+			put(cl.y, cl.x, ch, cl.fg)
 		}
 	}
 	var out []string

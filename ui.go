@@ -445,34 +445,7 @@ var octBits = [4][2]int{
 	{0x40, 0x80},
 }
 
-// octExtra — 26 паттернов 2×4, закодированных ВНЕ U+1CD00–1CDE5: пустой,
-// полный, квадранты, половины и четверти из Block Elements и Legacy
-// Computing. Остальные 230 лежат в U+1CD00–1CDE5 подряд по возрастанию
-// маски — из этого и собирается таблица.
-var octExtra = map[int]rune{
-	0x00: ' ', 0x01: '𜺨', 0x02: '𜺫', 0x03: '🮂', 0x05: '▘', 0x0A: '▝',
-	0x0F: '▀', 0x14: '🯦', 0x28: '🯧', 0x3F: '🮅', 0x40: '𜺣', 0x50: '▖',
-	0x55: '▌', 0x5A: '▞', 0x5F: '▛', 0x80: '𜺠', 0xA0: '▗', 0xA5: '▚',
-	0xAA: '▐', 0xAF: '▜', 0xC0: '▂', 0xF0: '▄', 0xF5: '▙', 0xFA: '▟',
-	0xFC: '▆', 0xFF: '█',
-}
-
-var octGlyph, octMasks = buildOctants()
-
-func buildOctants() ([256]rune, map[rune]int) {
-	var glyphs [256]rune
-	masks := make(map[rune]int, 256)
-	next := rune(0x1CD00)
-	for mask := 0; mask < 256; mask++ {
-		g, ok := octExtra[mask]
-		if !ok {
-			g, next = next, next+1
-		}
-		glyphs[mask] = g
-		masks[g] = mask
-	}
-	return glyphs, masks
-}
+var octGlyph, octMasks = cellbuf.OctGlyph, cellbuf.OctMasks
 
 // dotBit — бит точки под курсором в текущем растре.
 func (m model) dotBit() int {
@@ -488,7 +461,7 @@ func (m model) dotMask(g rune) int {
 	if m.dotOct {
 		return octMasks[g] // ' ' и не-октанты дают 0
 	}
-	return brailleMask(g)
+	return cellbuf.BrailleMask(g)
 }
 
 // dotGlyph — глиф по маске в текущем растре.
@@ -547,15 +520,6 @@ func (m *model) moveDot(dir string) {
 	dx = min(max(dx, 0), m.proj.CanvasW*2-1)
 	m.curR, m.dotR = dy/4, dy%4
 	m.curC, m.dotC = dx/2, dx%2
-}
-
-// brailleMask — маска точек глифа; не-брайль (включая пробел) = 0,
-// поэтому первый тоггл на чужой ячейке заменяет её брайлем с одной точкой.
-func brailleMask(g rune) int {
-	if g >= 0x2800 && g <= 0x28FF {
-		return int(g - 0x2800)
-	}
-	return 0
 }
 
 // toggleDot — XOR точки под курсором. Погасшая последняя точка пишет
@@ -1087,7 +1051,11 @@ func (m *model) composite() [][]vcell {
 			if cl.Fg >= 0 {
 				fg = cl.Fg
 			}
-			put(p.y, p.x, vcell{cl.G, fg, li})
+			g := cl.G
+			if L.Overstrike && p.y >= 0 && p.y < H && p.x >= 0 && p.x < W {
+				g, _ = cellbuf.Overstrike(grid[p.y][p.x].g, g)
+			}
+			put(p.y, p.x, vcell{g, fg, li})
 		}
 	}
 	return grid

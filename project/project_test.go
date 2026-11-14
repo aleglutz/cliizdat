@@ -235,3 +235,38 @@ func TestSiblingManifestIgnoredWhenUnrelated(t *testing.T) {
 		t.Fatalf("should load bare txt (W=1), got %d", p.CanvasW)
 	}
 }
+
+func TestOverstrikeLayer(t *testing.T) {
+	for _, tc := range []struct {
+		flag, want string
+	}{
+		{``, "\x1b[38;5;231m⠈▐E⠁\x1b[38;5;240m⠇\x1b[0m\n"},
+		{`, "overstrike": true`, "\x1b[38;5;231m⠉█E⠁\x1b[38;5;240m⠇\x1b[0m\n"},
+	} {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "a.txt"), []byte("⠁▌#▌⠇\n"), 0o644)
+		os.WriteFile(filepath.Join(dir, "b.txt"), []byte("⠈▐E⠁\n"), 0o644)
+		path := filepath.Join(dir, "project.json")
+		os.WriteFile(path, []byte(`{
+  "canvas": [5, 1],
+  "layers": [
+    {"file": "a.txt", "at": [1, 1], "fg": 240},
+    {"file": "b.txt", "at": [1, 1], "fg": 231`+tc.flag+`}
+  ]
+}`), 0o644)
+		p, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := string(p.ExportANS()); got != tc.want {
+			t.Fatalf("flag %q: export\ngot:  %q\nwant: %q", tc.flag, got, tc.want)
+		}
+		if err := p.SaveManifest(); err != nil {
+			t.Fatal(err)
+		}
+		saved, _ := os.ReadFile(path)
+		if has := bytes.Contains(saved, []byte(`"overstrike": true`)); has != (tc.flag != "") {
+			t.Fatalf("flag %q: saved manifest overstrike=%v\n%s", tc.flag, has, saved)
+		}
+	}
+}

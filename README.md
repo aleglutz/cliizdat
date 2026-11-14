@@ -16,6 +16,10 @@ the grid physically cannot break. Keys just do things — no modes to toggle.
 - Modeless, keyboard-only editing on a fixed cell grid
 - Per-cell 256-color, stored as sparse git-diffable `.color` sidecars
 - Layers with a JSON manifest, knockout halos, solo view
+- Overstrike layers: `"overstrike": true` on a layer in the manifest merges its
+  braille and octant glyphs with the same family underneath (dots/blocks are
+  OR-ed into one glyph) instead of replacing them; the cell takes the upper
+  layer's color
 - Rectangular selection: fill, repaint, copy / cut / paste, flip X / Y
 - Braille dot-mode: draw at 2×4 sub-cell resolution, one dot per keystroke
 - Loadable glyph palettes, one page per section (octants auto-sorted by density)

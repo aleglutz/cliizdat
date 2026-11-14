@@ -50,6 +50,11 @@ func press(m model, keys ...string) model {
 	return m
 }
 
+func blink(m model) model {
+	nm, _ := m.Update(dotBlinkMsg{})
+	return nm.(model)
+}
+
 func implicitProject(t *testing.T, w, h int) *project.Project {
 	t.Helper()
 	dir := t.TempDir()
@@ -431,6 +436,141 @@ func TestDotModeLeavesStampingAlone(t *testing.T) {
 	}
 	if m.dotOn {
 		t.Fatal("dot-mode still on after esc")
+	}
+}
+
+func TestDotCursorShowsContentAndBlinksTarget(t *testing.T) {
+	p := implicitProject(t, 4, 2)
+	// ⠉ = d1+d4 (верхний ряд); цель — d2 (левый столбец, второй ряд)
+	p.Layers[0].Buf.Apply([]cellbuf.Change{{Row: 0, Col: 0,
+		After: cellbuf.Cell{G: '⠉', Fg: -1}}})
+	m := newTestModel(p, nil)
+	m.termW, m.termH = 20, 8
+	m = press(m, "b", "down")
+
+	// фаза 0 — правда: под курсором ровно то, что нарисовано
+	if v := m.View(); !strings.Contains(v, "⠉") {
+		t.Fatal("фаза 0: содержимое ячейки не показано как есть")
+	}
+	m = blink(m)
+	if !m.dotPhase {
+		t.Fatal("тик не переключил фазу")
+	}
+	if v := m.View(); !strings.Contains(v, "⠋") { // ⠉ + d2
+		t.Fatal("фаза 1: целевая точка не подмешана в глиф")
+	}
+	// вне дот-режима фаза не бежит — курсор не мигает
+	m = blink(press(m, "esc"))
+	if m.dotPhase {
+		t.Fatal("мигание продолжается вне дот-режима")
+	}
+}
+
+func TestDotCursorMarksEraseOnInkedTarget(t *testing.T) {
+	p := implicitProject(t, 4, 2)
+	p.Layers[0].Buf.Apply([]cellbuf.Change{{Row: 0, Col: 0,
+		After: cellbuf.Cell{G: '⠁', Fg: -1}}}) // d1 — на нём и стоим
+	m := newTestModel(p, nil)
+	m = press(m, "b")
+
+	_, st := m.dotCursor('⠁')
+	if st.GetForeground() != dotEraseColor {
+		t.Fatalf("цель закрашена → ждём цвет стирания, got %v", st.GetForeground())
+	}
+	if _, st := m.dotCursor(' '); st.GetForeground() != dotAddColor {
+		t.Fatalf("цель пуста → ждём акцентный цвет, got %v", st.GetForeground())
+	}
+}
+
+// ── octant dot-mode ────────────────────────────────────────────────────
+
+func TestOctantTableIsComplete(t *testing.T) {
+	if len(octMasks) != 256 {
+		t.Fatalf("octMasks: %d глифов, want 256 (есть коллизии)", len(octMasks))
+	}
+	// 230 блочных октантов лежат подряд, пропуская 26 масок из octExtra
+	if octGlyph[0x04] != 0x1CD00 || octGlyph[0xFE] != 0x1CDE5 {
+		t.Fatalf("границы диапазона: %U %U", octGlyph[0x04], octGlyph[0xFE])
+	}
+	for mask, want := range map[int]rune{
+		0x00: ' ', 0x01: '𜺨', 0x03: '🮂', 0x05: '▘', 0x0F: '▀',
+		0x55: '▌', 0xF0: '▄', 0xFF: '█',
+	} {
+		if octGlyph[mask] != want {
+			t.Fatalf("маска %#02x: got %U, want %U", mask, octGlyph[mask], want)
+		}
+	}
+}
+
+func TestOctantDotModeToggleAndErase(t *testing.T) {
+	p := implicitProject(t, 10, 3)
+	m := newTestModel(p, nil)
+
+	m = press(m, "o", ".")
+	if g := p.Layers[0].Buf.Get(0, 0).G; g != '𜺨' { // октант 1
+		t.Fatalf("первый октант: got %U, want U+1CEA8", g)
+	}
+	m = press(m, "right", ".")
+	if g := p.Layers[0].Buf.Get(0, 0).G; g != '🮂' { // 1+2 = верхняя четверть
+		t.Fatalf("второй октант: got %U, want U+1FB82", g)
+	}
+	m = press(m, "down", ".")
+	if g := p.Layers[0].Buf.Get(0, 0).G; g != '𜴅' { // октанты 1+2+4
+		t.Fatalf("третий октант: got %U, want U+1CD05", g)
+	}
+	// гасим все три — ячейка пробел, не пустой октант
+	m = press(m, ".", "up", ".", "left", ".")
+	if g := p.Layers[0].Buf.Get(0, 0).G; g != ' ' {
+		t.Fatalf("очищенная ячейка: got %U, want space", g)
+	}
+}
+
+func TestDotModeRasterSwitch(t *testing.T) {
+	p := implicitProject(t, 10, 3)
+	m := newTestModel(p, nil)
+
+	m = press(m, "b", "o") // чужая клавиша переключает растр, не выходит
+	if !m.dotOn || !m.dotOct {
+		t.Fatalf("b→o: dotOn=%v dotOct=%v", m.dotOn, m.dotOct)
+	}
+	m = press(m, ".")
+	if g := p.Layers[0].Buf.Get(0, 0).G; g != '𜺨' {
+		t.Fatalf("после переключения рисуем октантами: %U", g)
+	}
+	// брайль поверх октанта: чужое семейство = маска 0, ячейка заменяется
+	m = press(m, "b", ".")
+	if g := p.Layers[0].Buf.Get(0, 0).G; g != '⠁' {
+		t.Fatalf("брайль поверх октанта: %U", g)
+	}
+	if m = press(m, "b"); m.dotOn {
+		t.Fatal("своя клавиша не выключила dot-mode")
+	}
+}
+
+func TestFlipOctantGlyphInPlace(t *testing.T) {
+	p := implicitProject(t, 1, 1)
+	// 𜺨 = октант 1 (верх-лево). H → октант 2 (𜺫); V → октант 7 (𜺣).
+	p.Layers[0].Buf.Apply([]cellbuf.Change{{Row: 0, Col: 0,
+		After: cellbuf.Cell{G: '𜺨', Fg: -1}}})
+	m := newTestModel(p, nil)
+
+	m = press(m, "X")
+	if g := p.Layers[0].Buf.Get(0, 0).G; g != '𜺫' {
+		t.Fatalf("flip X: got %U, want U+1CEAB", g)
+	}
+	m = press(m, "X", "Y")
+	if g := p.Layers[0].Buf.Get(0, 0).G; g != '𜺣' {
+		t.Fatalf("flip Y: got %U, want U+1CEA3", g)
+	}
+	// инволюция на всём диапазоне
+	for mask := 0; mask < 256; mask++ {
+		g := octGlyph[mask]
+		if h := mirrorGlyph(mirrorGlyph(g, true), true); h != g {
+			t.Fatalf("flip X дважды, маска %#02x: %U != %U", mask, h, g)
+		}
+		if v := mirrorGlyph(mirrorGlyph(g, false), false); v != g {
+			t.Fatalf("flip Y дважды, маска %#02x: %U != %U", mask, v, g)
+		}
 	}
 }
 

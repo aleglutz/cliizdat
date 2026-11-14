@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -40,7 +41,21 @@ var (
 	statusStyle = lipgloss.NewStyle().Reverse(true)
 	selStyle    = lipgloss.NewStyle().Background(lipgloss.Color("238"))
 	faintStyle  = lipgloss.NewStyle().Faint(true)
+
+	// дот-курсор: подложка ячейки + цвет операции («поставит» / «сотрёт»)
+	dotCellBg     = lipgloss.AdaptiveColor{Dark: "238", Light: "#ded7c8"}
+	dotAddColor   = accent
+	dotEraseColor = lipgloss.AdaptiveColor{Dark: "203", Light: "#b3261e"}
 )
+
+// период мигания целевой точки в дот-режиме
+const dotBlinkPeriod = 450 * time.Millisecond
+
+type dotBlinkMsg struct{}
+
+func dotBlink() tea.Cmd {
+	return tea.Tick(dotBlinkPeriod, func(time.Time) tea.Msg { return dotBlinkMsg{} })
+}
 
 type model struct {
 	proj   *project.Project
@@ -56,7 +71,9 @@ type model struct {
 	termW, termH int
 
 	dotOn      bool
-	dotR, dotC int // суб-позиция точки в ячейке: ряд 0..3, столбец 0..1
+	dotOct     bool // растр дот-режима: false — брайль, true — октанты
+	dotPhase   bool // фаза мигания целевой точки
+	dotR, dotC int  // суб-позиция точки в ячейке: ряд 0..3, столбец 0..1
 
 	lightBg bool // терминал со светлым фоном: серую рампу fg отражаем
 
@@ -113,7 +130,10 @@ func (m model) adaptFg(fg int) int {
 	return fg
 }
 
-func (m model) Init() tea.Cmd { return nil }
+// Init заводит вечный тик мигания: вне дот-режима он ничего не меняет в
+// кадре (bubbletea не пишет в терминал, если картинка та же), зато ввод
+// никогда не возвращает команд — склейка быстрых нажатий не теряет хвост.
+func (m model) Init() tea.Cmd { return dotBlink() }
 
 func (m *model) layer() *project.Layer { return m.proj.Layers[m.active] }
 
@@ -122,6 +142,9 @@ func (m model) viewW() int { return max(1, m.termW-2) } // рамка по бо�
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case dotBlinkMsg:
+		m.dotPhase = m.dotOn && !m.dotPhase
+		return m, dotBlink()
 	case tea.WindowSizeMsg:
 		if msg.Width > 0 {
 			m.termW = msg.Width
@@ -182,16 +205,26 @@ func (m model) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case ".":
 			m.toggleDot()
 			return m, nil
-		case "b", "esc":
+		case "b", "o":
+			// своя клавиша выключает режим, чужая — переключает растр
+			if m.dotOct == (key == "o") {
+				m.dotOn = false
+				m.status = "dot-mode off"
+			} else {
+				m.dotOct = key == "o"
+				m.status = m.dotHint()
+			}
+			return m, nil
+		case "esc":
 			m.dotOn = false
 			m.status = "dot-mode off"
 			return m, nil
 		}
 	}
 	switch key {
-	case "b":
-		m.dotOn = true
-		m.status = "dot-mode: стрелки — точка, `.` — тоггл, b/Esc — выход"
+	case "b", "o":
+		m.dotOn, m.dotOct = true, key == "o"
+		m.status = m.dotHint()
 	case "up", "down", "left", "right":
 		if !m.selSticky {
 			m.selOn = false
@@ -392,7 +425,7 @@ func (m *model) fillOrStamp(slot int, advance bool) {
 	}
 }
 
-// ── braille dot-mode ───────────────────────────────────────────────────
+// ── dot-mode: брайль и октанты ─────────────────────────────────────────
 
 // dotBits — бит точки брайля по [ряд][столбец] сетки 2×4:
 // d1,d2,d3,d7 — левый столбец, d4,d5,d6,d8 — правый. Глиф = U+2800 | маска.
@@ -401,6 +434,98 @@ var dotBits = [4][2]int{
 	{0x02, 0x10},
 	{0x04, 0x20},
 	{0x40, 0x80},
+}
+
+// octBits — то же для октантов: нумерация 1–8 идёт построчно
+// (1 2 / 3 4 / 5 6 / 7 8), бит N = 1<<(N-1), как в именах BLOCK OCTANT-…
+var octBits = [4][2]int{
+	{0x01, 0x02},
+	{0x04, 0x08},
+	{0x10, 0x20},
+	{0x40, 0x80},
+}
+
+// octExtra — 26 паттернов 2×4, закодированных ВНЕ U+1CD00–1CDE5: пустой,
+// полный, квадранты, половины и четверти из Block Elements и Legacy
+// Computing. Остальные 230 лежат в U+1CD00–1CDE5 подряд по возрастанию
+// маски — из этого и собирается таблица.
+var octExtra = map[int]rune{
+	0x00: ' ', 0x01: '𜺨', 0x02: '𜺫', 0x03: '🮂', 0x05: '▘', 0x0A: '▝',
+	0x0F: '▀', 0x14: '🯦', 0x28: '🯧', 0x3F: '🮅', 0x40: '𜺣', 0x50: '▖',
+	0x55: '▌', 0x5A: '▞', 0x5F: '▛', 0x80: '𜺠', 0xA0: '▗', 0xA5: '▚',
+	0xAA: '▐', 0xAF: '▜', 0xC0: '▂', 0xF0: '▄', 0xF5: '▙', 0xFA: '▟',
+	0xFC: '▆', 0xFF: '█',
+}
+
+var octGlyph, octMasks = buildOctants()
+
+func buildOctants() ([256]rune, map[rune]int) {
+	var glyphs [256]rune
+	masks := make(map[rune]int, 256)
+	next := rune(0x1CD00)
+	for mask := 0; mask < 256; mask++ {
+		g, ok := octExtra[mask]
+		if !ok {
+			g, next = next, next+1
+		}
+		glyphs[mask] = g
+		masks[g] = mask
+	}
+	return glyphs, masks
+}
+
+// dotBit — бит точки под курсором в текущем растре.
+func (m model) dotBit() int {
+	if m.dotOct {
+		return octBits[m.dotR][m.dotC]
+	}
+	return dotBits[m.dotR][m.dotC]
+}
+
+// dotMask — маска глифа в текущем растре; глиф чужого семейства (включая
+// пробел) = 0, поэтому первый тоггл на нём заменяет ячейку целиком.
+func (m model) dotMask(g rune) int {
+	if m.dotOct {
+		return octMasks[g] // ' ' и не-октанты дают 0
+	}
+	return brailleMask(g)
+}
+
+// dotGlyph — глиф по маске в текущем растре.
+func (m model) dotGlyph(mask int) rune {
+	if m.dotOct {
+		return octGlyph[mask]
+	}
+	return rune(0x2800 + mask)
+}
+
+// dotCursor — отрисовка ячейки под курсором в дот-режиме. Ячейка терминала
+// даёт всего два тона (fg глифа и bg), а показать надо три вещи: что уже
+// закрашено, где цель и что пусто. Поэтому: содержимое ячейки рисуется как
+// есть (видно, какая часть символа закрашена) цветом курсора, отличным от
+// печатного, а целевая точка мигает — она то входит в глиф, то нет.
+// Цвет говорит, что сделает `.`: акцентный — поставит, красный — сотрёт.
+// Ячейка помечена фоном, так что курсор виден и на пустом месте.
+func (m model) dotCursor(g rune) (rune, lipgloss.Style) {
+	mask, bit := m.dotMask(g), m.dotBit()
+	shown := mask
+	if m.dotPhase {
+		shown ^= bit
+	}
+	fg := dotAddColor
+	if mask&bit != 0 {
+		fg = dotEraseColor
+	}
+	return m.dotGlyph(shown), lipgloss.NewStyle().Foreground(fg).Background(dotCellBg)
+}
+
+func (m model) dotHint() string {
+	raster := "брайль"
+	if m.dotOct {
+		raster = "октанты"
+	}
+	return "dot-mode (" + raster + "): стрелки — точка, `.` — тоггл, " +
+		"b/o — растр, Esc — выход"
 }
 
 // moveDot двигает курсор на одну точку в глобальной дот-сетке канвы
@@ -442,10 +567,10 @@ func (m *model) toggleDot() {
 		m.status = "вне активного слоя"
 		return
 	}
-	mask := brailleMask(L.Buf.Get(lr, lc).G) ^ dotBits[m.dotR][m.dotC]
+	mask := m.dotMask(L.Buf.Get(lr, lc).G) ^ m.dotBit()
 	after := cellbuf.Blank
 	if mask != 0 {
-		g := rune(0x2800 + mask)
+		g := m.dotGlyph(mask)
 		after = cellbuf.Cell{G: g, Fg: m.cellFg(g)}
 	}
 	L.Buf.Apply([]cellbuf.Change{{Row: lr, Col: lc, After: after}})
@@ -477,8 +602,8 @@ func symPairs(m map[rune]rune) map[rune]rune {
 var mirrorH = symPairs(mirrorHPairs)
 var mirrorV = symPairs(mirrorVPairs)
 
-// brailleSwap переставляет биты точек по списку пар (a,b).
-func brailleSwap(mask int, pairs [4][2]int) int {
+// swapBits переставляет биты маски по списку пар (a,b).
+func swapBits(mask int, pairs [4][2]int) int {
 	out := 0
 	for _, p := range pairs {
 		if mask&p[0] != 0 {
@@ -496,9 +621,17 @@ func mirrorGlyph(g rune, h bool) rune {
 	if g >= 0x2800 && g <= 0x28FF {
 		mask := int(g - 0x2800)
 		if h {
-			return rune(0x2800 + brailleSwap(mask, [4][2]int{{0x01, 0x08}, {0x02, 0x10}, {0x04, 0x20}, {0x40, 0x80}}))
+			return rune(0x2800 + swapBits(mask, [4][2]int{{0x01, 0x08}, {0x02, 0x10}, {0x04, 0x20}, {0x40, 0x80}}))
 		}
-		return rune(0x2800 + brailleSwap(mask, [4][2]int{{0x01, 0x40}, {0x02, 0x04}, {0x08, 0x80}, {0x10, 0x20}}))
+		return rune(0x2800 + swapBits(mask, [4][2]int{{0x01, 0x40}, {0x02, 0x04}, {0x08, 0x80}, {0x10, 0x20}}))
+	}
+	// октанты и их эквиваленты из Block Elements — тем же бит-свапом:
+	// по горизонтали меняются столбцы, по вертикали — порядок рядов
+	if mask, ok := octMasks[g]; ok && g != ' ' {
+		if h {
+			return octGlyph[swapBits(mask, [4][2]int{{0x01, 0x02}, {0x04, 0x08}, {0x10, 0x20}, {0x40, 0x80}})]
+		}
+		return octGlyph[swapBits(mask, [4][2]int{{0x01, 0x40}, {0x02, 0x80}, {0x04, 0x10}, {0x08, 0x20}})]
 	}
 	tbl := mirrorV
 	if h {
@@ -1008,10 +1141,10 @@ func (m model) View() string {
 				}
 				switch {
 				case r == m.curR && c == m.curC:
-					st = cursorStyle
 					if m.dotOn {
-						// превью того, что сделает `.`: маска с XOR целевой точки
-						vc.g = rune(0x2800 + (brailleMask(vc.g) ^ dotBits[m.dotR][m.dotC]))
+						vc.g, st = m.dotCursor(vc.g)
+					} else {
+						st = cursorStyle
 					}
 				case r >= r1 && r <= r2 && c >= c1 && c <= c2:
 					st = st.Background(lipgloss.Color("238"))
@@ -1125,7 +1258,8 @@ var helpRows = [][2]string{
 	{"1–9", "stamp slot (fills the selection)"},
 	{"0 / x", "erase (slot 0 is always the eraser)"},
 	{"y d p", "copy · cut · paste (buffer is shared with other cliizdat windows)"},
-	{"b", "braille dot-mode: arrows move per dot, `.` toggles"},
+	{"b / o", "dot-mode on the 2×4 grid: braille · octant blocks"},
+	{"", "arrows move per dot, `.` toggles, b/o switch raster"},
 	{"X Y", "flip selection/layer horizontally · vertically (mirrors glyphs)"},
 	{"", ""},
 	{"c", "256-color picker"},
@@ -1223,7 +1357,11 @@ func (m model) statusBar() string {
 		}
 		dot := ""
 		if m.dotOn {
-			dot = fmt.Sprintf(" │ DOT %d,%d", m.curR*4+m.dotR+1, m.curC*2+m.dotC+1)
+			label := "DOT"
+			if m.dotOct {
+				label = "OCT"
+			}
+			dot = fmt.Sprintf(" │ %s %d,%d", label, m.curR*4+m.dotR+1, m.curC*2+m.dotC+1)
 		}
 		left := fmt.Sprintf(" %d,%d │ L%d/%d │ %d%c U+%04X │ fg %s ",
 			m.curR+1, m.curC+1,
